@@ -3,14 +3,25 @@ import pandas as pd
 from datetime import datetime, timedelta
 import logging
 from typing import List, Dict, Any
+import json
+from kafka import KafkaProducer
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Kafka configuration
+KAFKA_BROKER = 'localhost:9092'
+KAFKA_TOPIC = 'financial-data'
+
+def create_kafka_producer() -> KafkaProducer:
+    """Create and return a Kafka producer"""
+    return KafkaProducer(
+        bootstrap_servers=[KAFKA_BROKER],
+        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+    )
+
 def fetch_stock_data(tickers: List[str], start_date: datetime, end_date: datetime) -> pd.DataFrame:
-    """
-    Fetch stock data for given tickers and date range
-    """
+    """Fetch stock data for given tickers and date range"""
     try:
         data = yf.download(tickers, start=start_date, end=end_date)
         if data.empty:
@@ -21,9 +32,7 @@ def fetch_stock_data(tickers: List[str], start_date: datetime, end_date: datetim
         return pd.DataFrame()
 
 def fetch_company_info(ticker: str) -> Dict[str, Any]:
-    """
-    Fetch company information for a given ticker
-    """
+    """Fetch company information for a given ticker"""
     try:
         company = yf.Ticker(ticker)
         info = company.info
@@ -35,9 +44,7 @@ def fetch_company_info(ticker: str) -> Dict[str, Any]:
         return {}
 
 def validate_data(data: pd.DataFrame) -> bool:
-    """
-    Validate the fetched data
-    """
+    """Validate the fetched data"""
     if data.empty:
         logging.error("Data validation failed: DataFrame is empty")
         return False
@@ -45,7 +52,18 @@ def validate_data(data: pd.DataFrame) -> bool:
         logging.warning("Data contains null values")
     return True
 
+def send_to_kafka(producer: KafkaProducer, topic: str, key: str, value: Dict[str, Any]):
+    """Send data to Kafka topic"""
+    try:
+        producer.send(topic, key=key.encode('utf-8'), value=value)
+        producer.flush()
+        logging.info(f"Sent data to Kafka topic {topic} with key {key}")
+    except Exception as e:
+        logging.error(f"Error sending data to Kafka: {str(e)}")
+
 def main():
+    producer = create_kafka_producer()
+
     # List of stock tickers to fetch
     tickers = ["AAPL", "GOOGL", "MSFT", "AMZN", "META"]
     
@@ -58,8 +76,9 @@ def main():
     
     if validate_data(stock_data):
         logging.info("Stock data validation passed")
-        print("Stock Data Sample:")
-        print(stock_data.head())
+        # Convert DataFrame to dictionary and send to Kafka
+        stock_dict = stock_data.to_dict(orient='index')
+        send_to_kafka(producer, KAFKA_TOPIC, 'stock_data', stock_dict)
     else:
         logging.error("Stock data validation failed")
     
@@ -67,11 +86,9 @@ def main():
     for ticker in tickers:
         company_info = fetch_company_info(ticker)
         if company_info:
-            print(f"\nCompany Info for {ticker}:")
-            print(f"Name: {company_info.get('longName', 'N/A')}")
-            print(f"Sector: {company_info.get('sector', 'N/A')}")
-            print(f"Industry: {company_info.get('industry', 'N/A')}")
-            print(f"Market Cap: {company_info.get('marketCap', 'N/A')}")
+            send_to_kafka(producer, KAFKA_TOPIC, f'company_info_{ticker}', company_info)
+    
+    producer.close()
 
 if __name__ == "__main__":
     main()
