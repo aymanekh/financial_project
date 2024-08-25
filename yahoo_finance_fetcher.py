@@ -52,9 +52,19 @@ def validate_data(data: pd.DataFrame) -> bool:
         logging.warning("Data contains null values")
     return True
 
+
+
+
 def send_to_kafka(producer: KafkaProducer, topic: str, key: str, value: Dict[str, Any]):
     """Send data to Kafka topic"""
     try:
+        # Convert DataFrame to dictionary, handling Timestamp objects
+        if isinstance(value, pd.DataFrame):
+            value = value.reset_index().to_dict(orient='records')
+        
+        # Ensure all values are JSON serializable
+        value = json.loads(json.dumps(value, default=str))
+        
         producer.send(topic, key=key.encode('utf-8'), value=value)
         producer.flush()
         logging.info(f"Sent data to Kafka topic {topic} with key {key}")
@@ -76,9 +86,8 @@ def main():
     
     if validate_data(stock_data):
         logging.info("Stock data validation passed")
-        # Convert DataFrame to dictionary and send to Kafka
-        stock_dict = stock_data.to_dict(orient='index')
-        send_to_kafka(producer, KAFKA_TOPIC, 'stock_data', stock_dict)
+        # Send stock data to Kafka
+        send_to_kafka(producer, KAFKA_TOPIC, 'stock_data', stock_data)
     else:
         logging.error("Stock data validation failed")
     
